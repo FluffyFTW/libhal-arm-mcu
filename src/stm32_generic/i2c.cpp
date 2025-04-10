@@ -265,67 +265,6 @@ i2c::~i2c()
   bit_modify(i2c_reg->cr1).clear(i2c_cr1::software_reset);
 }
 
-void i2c::clear_error_flag(hal::output_pin* sda, hal::output_pin* scl)
-{
-  auto i2c_reg = get_i2c_reg(m_i2c);
-  /// 1. Disable the I2C peripheral by clearing the PE bit in I2Cx_CR1 register.
-  bit_modify(i2c_reg->cr1).clear(i2c_cr1::peripheral_enable);
-
-  /// 2. Configure the SCL and SDA I/Os as General Purpose Output Open-Drain,
-  /// High level (Write 1 to GPIOx_ODR).
-  sda->configure({ .resistor = pin_resistor::none, .open_drain = true });
-  scl->configure({ .resistor = pin_resistor::none, .open_drain = true });
-  sda->level(true);
-  scl->level(true);
-  // /// 3. Check SCL and SDA High level in GPIOx_IDR.
-  // while (!sda->level() || !scl->level()) {
-  //   continue;
-  // }
-  // /// 4. Configure the SDA I/O as General Purpose Output Open-Drain, Low
-  // level
-  // /// (Write 0 to GPIOx_ODR).
-  // sda->level(false);
-  // scl->level(false);
-  // /// 5. Check SDA Low level in GPIOx_IDR.
-  // while (sda->level() || scl->level()) {
-  //   continue;
-  // }
-  // /// 8. Configure the SCL I/O as General Purpose Output Open-Drain, High
-  // level
-  // /// (Write 1 to GPIOx_ODR).
-  // sda->level(true);
-  // scl->level(true);
-
-  // /// 9. Check SCL High level in GPIOx_IDR.
-  // while (!sda->level() || !scl->level()) {
-  //   continue;
-  // }
-
-  /// 13. Set SWRST bit in I2Cx_CR1 register.
-  // bit_modify(i2c_reg->cr1).set(i2c_cr1::software_reset);
-
-  // /// 14. Clear SWRST bit in I2Cx_CR1 register.
-  // bit_modify(i2c_reg->cr1).clear(i2c_cr1::software_reset);
-
-  // /// 15. Enable the I2C peripheral by setting the PE bit in I2Cx_CR1
-  // register. bit_modify(i2c_reg->cr1).set(i2c_cr1::peripheral_enable);
-
-  // Set the SDA line to high, so that after the slave releases
-  // the SDA and listen for ACK/NACK, it will get a NACK.
-  sda->level(true);
-
-  for (int i = 0; i < 10; ++i) {
-    // Set SCL high.
-    scl->level(true);
-    continue;
-    // Set SCL low.
-    scl->level(false);
-    continue;
-  }
-  // Set SCL high. When I2C is idle the line should be pulled high.
-  scl->level(true);
-}
-
 void i2c::configure(hal::i2c::settings const& p_settings, hertz p_frequency)
 {
   constexpr auto slow_mode_max_speed = 100_Hz;
@@ -381,17 +320,22 @@ void i2c::handle_i2c_event() noexcept
   if (bit_extract<i2c_sr1::start>(status)) {
     if (!m_data_out.empty()) {
       data = to_8_bit_address(m_address, i2c_operation::write);
-      m_transmitter = true;
-      m_reciever = false;
+      m_state = transmittion_state::transmitter;
     } else {
       data = to_8_bit_address(m_address, i2c_operation::read);
-      m_transmitter = false;
-      m_reciever = true;
+      m_state = transmittion_state::reciever;
     }
     return;
   }
 
   if (bit_extract<i2c_sr1::addr>(status)) {
+    if (m_state == transmittion_state::reciever) {
+      switch (m_data_in.size()) {
+        case 1:
+          bit_modify(i2c_reg->cr1).clear(i2c_cr1::ack_enable);
+        default:
+      }
+    }
     if (m_data_in.size() == 1 && m_reciever) {
       bit_modify(i2c_reg->cr1).clear(i2c_cr1::ack_enable);
     }
@@ -421,7 +365,7 @@ void i2c::handle_i2c_event() noexcept
       } else {
         bit_modify(i2c_reg->cr1).clear(i2c_cr1::ack_enable);
         bit_modify(i2c_reg->cr1).set(i2c_cr1::stop);
-        m_busy = false;
+        m_state = transmittion_state::free;
       }
     } else {
       data = m_data_out[0];
@@ -445,7 +389,7 @@ void i2c::handle_i2c_event() noexcept
         bit_modify(i2c_reg->cr1).set(i2c_cr1::stop);
         m_data_in[1] = data;
         m_data_in[2] = data;
-        m_busy = false;
+        m_state = transmittion_state::free;
         break;
       }
 
@@ -455,7 +399,7 @@ void i2c::handle_i2c_event() noexcept
         }
         m_data_in[0] = data;
         bit_modify(i2c_reg->cr1).set(i2c_cr1::stop);
-        m_busy = false;
+        m_state = transmittion_state::free;
         break;
       }
 
@@ -517,7 +461,7 @@ void i2c::transaction(hal::byte p_address,
   m_address = p_address;
   m_data_out = p_data_out;
   m_data_in = p_data_in;
-  m_busy = true;
+  m_state = transmittion_state::transmitter;
 
   auto i2c_reg = get_i2c_reg(m_i2c);
   bit_modify(i2c_reg->cr1)
@@ -525,7 +469,7 @@ void i2c::transaction(hal::byte p_address,
     .set(i2c_cr1::ack_enable)
     .clear(i2c_cr1::stop);
   bit_modify(i2c_reg->cr1).set(i2c_cr1::start);
-  while (m_busy) {
+  while (m_state != transmittion_state::free) {
     try {
       p_timeout();
       m_waiter->wait();

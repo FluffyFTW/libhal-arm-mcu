@@ -1,3 +1,16 @@
+// Copyright 2024 - 2025 Khalil Estell and the libhal contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #pragma once
 
@@ -10,19 +23,32 @@
 namespace hal::stm32f411 {
 class i2c : public hal::i2c
 {
+  /**
+   * @brief i2c driver for the stm32f411 series of microcontrollers
+   *
+   * The stm32f411 series i2c peripherals utilize a state machine and interrupts to
+   * handle transmitting and receiving data. This driver does the same. A
+   * `hal::io_waiter` may be passed to the constructor in order to control what
+   * the driver does when its waiting for the i2c transaction to complete.
+   */
 public:
   /**
    * @brief Construct a new i2c object NOTE: does not use internal pull-up
    * resistors
    *
-   * @param p_bus_number 1 -3
-   * @param p_settings i2c setting
-   * @param p_waiter io waiter
+   * @param p_bus_number - i2c bus number from 1 to 3
+   * @param p_settings - i2c setting
+   * @param p_waiter - A `hal::io_waiter` for controlling the driver's behavior
+   * while the cpu waits for the interrupt driven i2c transaction to finish.
+   * Note that if the waiter blocks the thread, then the timeout passed to
+   * transaction() will be ignored. If sleep is used, then the timeout will be
+   * checked after each waking interrupt fires off.
+   * @throws hal::operation_not_supported - if the settings or if the bus number
+   * is not 0, 1, or 2.
    */
   i2c(std::uint8_t p_bus_number,
       i2c::settings const& p_settings = {},
       hal::io_waiter& p_waiter = hal::polling_io_waiter());
-
   i2c(i2c const& p_other) = delete;
   i2c& operator=(i2c const& p_other) = delete;
   i2c(i2c&& p_other) noexcept = delete;

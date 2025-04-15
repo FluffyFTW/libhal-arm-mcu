@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <libhal/functional.hpp>
 #include <span>
 
 #include <libhal/i2c.hpp>
